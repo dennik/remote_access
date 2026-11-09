@@ -1,0 +1,25 @@
+[package]
+name = "rd-agent"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "rdagent"
+path = "src/main.rs"
+
+[dependencies]
+rd-common = { path = "../common" }
+anyhow.workspace = true
+clap.workspace = true
+getrandom.workspace = true
+hex.workspace = true
+humantime = "2"
+jpeg-encoder = { version = "0.7", features = ["simd"] }
+num_cpus = "1"
+postcard.workspace = true
+rayon = "1"
+rcgen = "0.14"
+tokio.workspace = true
+tokio-rustls.workspace = true
+windows.workspace = true
+windows-service = "0.8"

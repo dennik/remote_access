@@ -1,0 +1,23 @@
+[package]
+name = "rd-viewer"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "rdviewer"
+path = "src/main.rs"
+
+[dependencies]
+rd-common = { path = "../common" }
+anyhow.workspace = true
+clap.workspace = true
+eframe = { version = "0.37", default-features = false, features = ["clipboard", "default_fonts", "glow"] }
+hex.workspace = true
+jpeg-decoder = "0.3"
+postcard.workspace = true
+rayon = "1"
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+windows.workspace = true
