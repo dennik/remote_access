@@ -68,6 +68,25 @@ For a quick test without installing, run this as the logged-in user:
 8. **CPU use.** Capture runs at up to 30 fps without change notifications, so check load on
    a 5K display. ScreenCaptureKit would also fix this.
 
+## Troubleshooting
+
+**The screen shows but the mouse and keyboard do nothing.** The agent is missing the
+Accessibility permission. macOS silently discards its input, and neither end reports an
+error. In System Settings → Privacy & Security → Accessibility:
+
+- An installed agent needs the entry for `/Library/Application Support/RemoteAccess/rdagent`.
+  A build in `target/release` doesn't count.
+- An agent started from Terminal for testing gets its permission through Terminal, so
+  Terminal needs the entry instead.
+- If `rdagent` is listed and switched on but control still fails, the entry is stale from
+  an earlier build. Remove it with −, add the binary again with +, and switch it on.
+
+Then restart the agent: `sudo launchctl kickstart -k gui/$(id -u)/com.remoteaccess.agent`.
+A missing permission is also logged at startup in
+`~/Library/Application Support/RemoteAccess/connections.log`.
+
+**The screen shows only the wallpaper.** The same, for the Screen Recording permission.
+
 ## Code signing
 
 Every rebuild changes the binary's signature, and macOS then forgets the two permissions.
