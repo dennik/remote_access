@@ -2,10 +2,9 @@
 //! input coming in. Runs over the TLS stream in console mode, or the service's
 //! named pipe in normal operation.
 
-use crate::capture::{self, Capturer, Grab};
-use crate::desktop::DesktopTracker;
+use crate::capture::{Capturer, Grab};
 use crate::diff::{self, Rect};
-use crate::input;
+use crate::platform::{capture, input, DesktopTracker};
 use anyhow::Result;
 use jpeg_encoder::{ColorType, Encoder, SamplingFactor};
 use rayon::prelude::*;

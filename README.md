@@ -1,9 +1,11 @@
 # Remote Access
 
-Remote desktop for Windows computers on a local network, such as unattended work PCs.
+Remote desktop for computers on a local network, such as unattended work PCs.
 
-- `rdagent.exe` runs as a service on each supervised computer and starts at boot.
-- `rdviewer.exe` runs on your machine: a dashboard, with each remote desktop in its own window.
+- `rdagent` runs on each supervised computer. On Windows it's a service that starts at
+  boot. On macOS it starts when the user logs in. **The macOS agent hasn't been run on a Mac
+  yet. See [MACOS.md](MACOS.md).**
+- `rdviewer.exe` runs on your Windows machine: a dashboard, with each remote desktop in its own window.
 
 ## Build
 
@@ -29,6 +31,19 @@ Both programs end up in `target\release`, and neither needs anything else instal
 
 Run `install` again with a new build of `rdagent.exe` to update a computer. Keys and
 identity are kept. To remove everything, run `rdagent.exe uninstall` from an elevated prompt.
+
+## Set up a Mac
+
+On the Mac, with the user who should be visible logged in:
+
+```
+cargo build --release -p rd-agent
+sudo ./target/release/rdagent install --admin-key <key>
+```
+
+Then turn on **Screen Recording** and **Accessibility** for `rdagent` in System Settings →
+Privacy & Security, as the installer explains. Add the Mac in the dashboard as usual. On a
+Mac, the Windows key acts as Command. Details and limits are in [MACOS.md](MACOS.md).
 
 ## Using a session
 
@@ -100,7 +115,8 @@ Console mode can't see the lock screen or UAC prompts, or send Ctrl+Alt+Del.
 - Encoding is JPEG, not video. Office and desktop use is smooth, but full-screen video
   on a 4K display is limited to around 15-20 fps. Frame rate is capped at 30 to protect
   whatever the computer is showing.
-- Windows only, and only the physical console session, not RDP sessions.
+- The viewer is Windows only. Windows agents serve only the physical console session, not
+  RDP sessions. Mac agents serve only a logged-in user, not the login window.
 - Text clipboard only.
 - The remote pointer isn't drawn. The viewer shows its own cursor, in the remote cursor's
   shape, so you won't see someone moving the mouse at the computer itself.

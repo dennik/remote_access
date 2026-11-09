@@ -2,17 +2,27 @@
 
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
+#[cfg(windows)]
 mod dashboard;
+#[cfg(windows)]
 mod framebuffer;
+#[cfg(windows)]
 mod net;
+#[cfg(windows)]
 mod session;
+#[cfg(windows)]
 mod store;
 
+#[cfg(windows)]
 use anyhow::Result;
+#[cfg(windows)]
 use clap::{Parser, Subcommand};
+#[cfg(windows)]
 use std::path::PathBuf;
+#[cfg(windows)]
 use std::time::Duration;
 
+#[cfg(windows)]
 #[derive(Parser)]
 #[command(name = "rdviewer", about = "Remote access viewer")]
 struct Cli {
@@ -20,6 +30,7 @@ struct Cli {
     command: Option<Command>,
 }
 
+#[cfg(windows)]
 #[derive(Subcommand)]
 enum Command {
     /// Open a remote desktop window. The dashboard does this for you.
@@ -47,6 +58,7 @@ enum Command {
     },
 }
 
+#[cfg(windows)]
 fn main() -> Result<()> {
     let cli = Cli::parse();
     if !matches!(cli.command, None | Some(Command::Session { .. })) {
@@ -64,4 +76,10 @@ fn main() -> Result<()> {
             net::snapshot(&addr, fingerprint.as_deref(), Duration::from_secs(seconds), out.as_deref())
         }
     }
+}
+
+#[cfg(not(windows))]
+fn main() {
+    eprintln!("rdviewer runs on Windows only. On a Mac, build just the agent: cargo build --release -p rd-agent");
+    std::process::exit(1);
 }

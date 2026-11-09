@@ -2,6 +2,7 @@
 
 use crate::config::Store;
 use crate::{server, session};
+use std::net::SocketAddr;
 use anyhow::{anyhow, bail, Result};
 use rd_common::proto::{read_msg, write_msg, ToAgent};
 use std::ffi::OsString;
@@ -75,13 +76,20 @@ fn service_body(store: Store) -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     let result = runtime.block_on(async {
         tokio::select! {
-            r = server::run_service(store) => r,
+            r = serve_with_helpers(store) => r,
             _ = stop_rx => Ok(()),
         }
     });
     runtime.shutdown_timeout(Duration::from_secs(2));
     handle.set_service_status(status(ServiceState::Stopped, ServiceControlAccept::empty()))?;
     result
+}
+
+/// Each session is relayed to a helper in the console session.
+async fn serve_with_helpers(store: Store) -> Result<()> {
+    let addr: SocketAddr = ([0, 0, 0, 0], rd_common::TCP_PORT).into();
+    let discovery = (rd_common::DISCOVERY_PORT, rd_common::TCP_PORT);
+    server::serve(store, addr, Some(discovery), |stream, log| relay_to_helper(stream, log)).await
 }
 
 // ------------------------------------------------------------------ helper side
