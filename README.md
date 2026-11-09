@@ -3,9 +3,8 @@
 Remote desktop for computers on a local network, such as unattended work PCs.
 
 - `rdagent` runs on each supervised computer. On Windows it's a service that starts at
-  boot. On macOS it starts when the user logs in. **The macOS agent hasn't been run on a Mac
-  yet. See [MACOS.md](MACOS.md).**
-- `rdviewer.exe` runs on your Windows machine: a dashboard, with each remote desktop in its own window.
+  boot. On macOS it starts when the user logs in. See [MACOS.md](MACOS.md) for the macOS agent.
+- `rdviewer` runs on your Windows PC or Mac: a dashboard, with each remote desktop in its own window.
 
 ## Build
 
@@ -115,10 +114,34 @@ Console mode can't see the lock screen or UAC prompts, or send Ctrl+Alt+Del.
 - Encoding is JPEG, not video. Office and desktop use is smooth, but full-screen video
   on a 4K display is limited to around 15-20 fps. Frame rate is capped at 30 to protect
   whatever the computer is showing.
-- The viewer is Windows only. Windows agents serve only the physical console session, not
+- Windows agents serve only the physical console session, not
   RDP sessions. Mac agents serve only a logged-in user, not the login window.
 - Text clipboard only.
 - The remote pointer isn't drawn. The viewer shows its own cursor, in the remote cursor's
   shape, so you won't see someone moving the mouse at the computer itself.
 - Scaling is fit-to-window only.
 - Scan only reaches the viewer's own subnet. Elsewhere, add computers by address.
+
+## macOS viewer
+
+The viewer also runs on macOS (Apple Silicon and Intel, macOS 11 or later). The agent
+stays Windows-only.
+
+Install or update it with:
+
+```
+curl -fsSL https://raw.githubusercontent.com/dennik/remote_access/main/macos/install.sh | sh
+```
+
+That puts **Remote Access** in `~/Applications`, adds an `rdviewer` command, and prints
+this Mac's admin key. Each Mac has its own key, stored in the login keychain, so run
+`rdagent.exe install --admin-key <key>` once on each PC to authorize it. Existing keys
+are kept.
+
+On a Mac, Command and Control both act as Ctrl, so Command+C and Command+V copy and paste
+on the remote computer. The Windows key and Ctrl+Alt+Del are in the Session menu, and
+Ctrl+Option+Return toggles full screen. macOS keeps Command+Tab, Command+Q and
+Command+Space for itself.
+
+To build a release, run `macos/build-app.sh` on a Mac with Rust installed and attach
+`target/macos/RemoteAccess-macos.zip` to a GitHub release.

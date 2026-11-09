@@ -1,8 +1,8 @@
 # macOS agent: status and next steps
 
 The macOS agent (`rdagent` on a Mac) lets the Windows viewer connect to Macs. It was
-written on Windows. It type-checks for Apple Silicon and Intel Macs, but it has **not been
-built, linked or run on a Mac yet**. Start here when working on a Mac.
+written on Windows. It builds, links and passes its tests on a Mac, and a Mac viewer has connected to
+it and received the real screen with correct colours. Input and the installer are still untested. Start here when working on a Mac.
 
 ## What's done
 
@@ -36,7 +36,7 @@ The protocol hasn't changed, so the current Windows viewer works with Mac agents
 
 ```
 xcode-select --install          # if not already installed
-cargo test --workspace          # the viewer is skipped on macOS
+cargo test --workspace
 cargo build --release -p rd-agent
 sudo ./target/release/rdagent install --admin-key <key from install-command.txt>
 ```
