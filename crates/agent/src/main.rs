@@ -6,14 +6,23 @@
 //! cannot do. `console` runs both roles in one process for testing, without
 //! admin rights, but it can't see the lock screen or UAC prompts.
 
+#[cfg(windows)]
 mod capture;
+#[cfg(windows)]
 mod config;
+#[cfg(windows)]
 mod desktop;
+#[cfg(windows)]
 mod diff;
+#[cfg(windows)]
 mod input;
+#[cfg(windows)]
 mod install;
+#[cfg(windows)]
 mod server;
+#[cfg(windows)]
 mod service;
+#[cfg(windows)]
 mod session;
 
 use anyhow::Result;
@@ -63,6 +72,7 @@ enum Command {
     },
 }
 
+#[cfg(windows)]
 fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Install { admin_keys } => install::install(&admin_keys),
@@ -77,4 +87,12 @@ fn main() -> Result<()> {
         Command::Service => service::run(),
         Command::Helper { pipe } => service::run_helper(&pipe),
     }
+}
+
+/// The agent captures and controls a Windows desktop, so it only builds for Windows.
+/// Elsewhere it compiles to a stub, so `cargo build --workspace` still works.
+#[cfg(not(windows))]
+fn main() -> Result<()> {
+    let _ = Cli::parse();
+    anyhow::bail!("rdagent only runs on Windows")
 }

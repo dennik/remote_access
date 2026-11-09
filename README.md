@@ -106,3 +106,27 @@ Console mode can't see the lock screen or UAC prompts, or send Ctrl+Alt+Del.
   shape, so you won't see someone moving the mouse at the computer itself.
 - Scaling is fit-to-window only.
 - Scan only reaches the viewer's own subnet. Elsewhere, add computers by address.
+
+## macOS viewer
+
+The viewer also runs on macOS (Apple Silicon and Intel, macOS 11 or later). The agent
+stays Windows-only.
+
+Install or update it with:
+
+```
+curl -fsSL https://raw.githubusercontent.com/dennik/remote_access/main/macos/install.sh | sh
+```
+
+That puts **Remote Access** in `~/Applications`, adds an `rdviewer` command, and prints
+this Mac's admin key. Each Mac has its own key, stored in the login keychain, so run
+`rdagent.exe install --admin-key <key>` once on each PC to authorize it. Existing keys
+are kept.
+
+On a Mac, Command and Control both act as Ctrl, so Command+C and Command+V copy and paste
+on the remote computer. The Windows key and Ctrl+Alt+Del are in the Session menu, and
+Ctrl+Option+Return toggles full screen. macOS keeps Command+Tab, Command+Q and
+Command+Space for itself.
+
+To build a release, run `macos/build-app.sh` on a Mac with Rust installed and attach
+`target/macos/RemoteAccess-macos.zip` to a GitHub release.

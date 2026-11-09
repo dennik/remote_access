@@ -4,7 +4,14 @@
 
 mod dashboard;
 mod framebuffer;
+mod geometry;
+#[cfg_attr(windows, allow(dead_code))]
+mod keymap;
 mod net;
+#[cfg(windows)]
+mod session;
+#[cfg(not(windows))]
+#[path = "session_egui.rs"]
 mod session;
 mod store;
 
@@ -49,6 +56,7 @@ enum Command {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    #[cfg(windows)]
     if !matches!(cli.command, None | Some(Command::Session { .. })) {
         // This is a GUI program, so command-line output needs the parent's console.
         let _ = unsafe { windows::Win32::System::Console::AttachConsole(u32::MAX) };

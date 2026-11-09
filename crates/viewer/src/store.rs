@@ -1,13 +1,10 @@
-//! The viewer's private key and saved computers, under %APPDATA%\RemoteAccess.
+//! The viewer's private key and saved computers, under %APPDATA%\RemoteAccess on
+//! Windows and ~/Library/Application Support/RemoteAccess on macOS.
 
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use windows::Win32::Foundation::{LocalFree, HLOCAL};
-use windows::Win32::Security::Cryptography::{
-    CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
-};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Host {
@@ -16,15 +13,26 @@ pub struct Host {
     pub fingerprint: String,
 }
 
+#[cfg(windows)]
+fn data_root() -> Result<PathBuf> {
+    Ok(PathBuf::from(std::env::var_os("APPDATA").ok_or_else(|| anyhow!("APPDATA is not set"))?))
+}
+
+#[cfg(target_os = "macos")]
+fn data_root() -> Result<PathBuf> {
+    let home = std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME is not set"))?;
+    Ok(PathBuf::from(home).join("Library").join("Application Support"))
+}
+
 fn dir() -> Result<PathBuf> {
-    let root = std::env::var_os("APPDATA").ok_or_else(|| anyhow!("APPDATA is not set"))?;
-    let dir = PathBuf::from(root).join("RemoteAccess");
+    let dir = data_root()?.join("RemoteAccess");
     fs::create_dir_all(&dir)?;
     Ok(dir)
 }
 
 /// Loads the login key, creating it on first run. It controls every computer that
 /// trusts this viewer, so it's encrypted with DPAPI to this Windows account.
+#[cfg(windows)]
 pub fn load_or_create_key() -> Result<[u8; 32]> {
     let path = dir()?.join("viewer.key");
     if path.exists() {
@@ -37,7 +45,12 @@ pub fn load_or_create_key() -> Result<[u8; 32]> {
     Ok(seed)
 }
 
+#[cfg(windows)]
 fn dpapi(data: &[u8], protect: bool) -> Result<Vec<u8>> {
+    use windows::Win32::Foundation::{LocalFree, HLOCAL};
+    use windows::Win32::Security::Cryptography::{
+        CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
+    };
     unsafe {
         let input = CRYPT_INTEGER_BLOB { cbData: data.len() as u32, pbData: data.as_ptr() as *mut u8 };
         let mut output = CRYPT_INTEGER_BLOB::default();
@@ -49,6 +62,35 @@ fn dpapi(data: &[u8], protect: bool) -> Result<Vec<u8>> {
         let result = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
         let _ = LocalFree(Some(HLOCAL(output.pbData.cast())));
         Ok(result)
+    }
+}
+
+#[cfg(target_os = "macos")]
+const KEYCHAIN_SERVICE: &str = "RemoteAccess viewer key";
+#[cfg(target_os = "macos")]
+const KEYCHAIN_ACCOUNT: &str = "viewer";
+/// errSecItemNotFound
+#[cfg(target_os = "macos")]
+const NOT_FOUND: i32 = -25300;
+
+/// Loads the login key, creating it on first run. It controls every computer that
+/// trusts this viewer, so it lives in the login keychain rather than in a file.
+#[cfg(target_os = "macos")]
+pub fn load_or_create_key() -> Result<[u8; 32]> {
+    use security_framework::passwords::{get_generic_password, set_generic_password};
+    match get_generic_password(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT) {
+        Ok(stored) => {
+            let seed = hex::decode(&stored).ok().and_then(|b| <[u8; 32]>::try_from(b).ok());
+            seed.ok_or_else(|| anyhow!("the \"{KEYCHAIN_SERVICE}\" keychain item is corrupt"))
+        }
+        // Any other failure, such as a denied keychain prompt, must not replace the key.
+        Err(e) if e.code() != NOT_FOUND => bail!("couldn't read the viewer key from the keychain: {e}"),
+        Err(_) => {
+            let seed = rd_common::auth::generate_seed()?;
+            set_generic_password(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT, hex::encode(seed).as_bytes())
+                .map_err(|e| anyhow!("couldn't save the viewer key to the keychain: {e}"))?;
+            Ok(seed)
+        }
     }
 }
 
@@ -65,7 +107,7 @@ pub fn save_hosts(hosts: &[Host]) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, windows))]
 mod tests {
     use super::*;
 
