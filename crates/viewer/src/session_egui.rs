@@ -49,6 +49,9 @@ struct Shared {
 
 impl Shared {
     fn send(&self, msg: ToAgent) {
+        if debug() && !matches!(msg, ToAgent::Ack { .. }) {
+            eprintln!("send {msg:?}");
+        }
         let _ = self.tx.send(msg);
     }
 
@@ -57,6 +60,12 @@ impl Shared {
             ctx.request_repaint();
         }
     }
+}
+
+/// RD_DEBUG=1 prints the input sent to the remote computer, for troubleshooting.
+fn debug() -> bool {
+    static DEBUG: OnceLock<bool> = OnceLock::new();
+    *DEBUG.get_or_init(|| std::env::var_os("RD_DEBUG").is_some())
 }
 
 struct Session {
@@ -389,9 +398,10 @@ impl Session {
     }
 
     /// Forwards this frame's keyboard and mouse input to the remote computer.
-    fn forward_input(&mut self, ctx: &egui::Context, area: egui::Rect, image: (i32, i32, i32, i32)) {
+    fn forward_input(&mut self, ctx: &egui::Context, area: egui::Rect, layer: egui::LayerId, image: (i32, i32, i32, i32)) {
         let events = ctx.input(|i| i.events.clone());
-        let menu_open = egui::Popup::is_any_open(ctx);
+        // A press belongs to the remote screen only if no menu or popup is drawn over it there.
+        let on_screen = |pos: egui::Pos2| area.contains(pos) && ctx.layer_id_at(pos).is_none_or(|l| l == layer);
         let remote = |pos: egui::Pos2| {
             to_remote((pos.x - area.min.x) as i32, (pos.y - area.min.y) as i32, image)
         };
@@ -405,6 +415,8 @@ impl Session {
                         self.release_all();
                     }
                 }
+                // Nothing else is forwarded while another window has focus.
+                _ if !self.focused => {}
                 egui::Event::Key { key, physical_key, pressed, repeat, .. } => {
                     let key = physical_key.unwrap_or(key);
                     let Some(code) = keymap::scan_code(key) else { continue };
@@ -430,7 +442,10 @@ impl Session {
                     }
                 }
                 egui::Event::PointerButton { pos, button, pressed, .. } => {
-                    if pressed && (!area.contains(pos) || menu_open) {
+                    if debug() {
+                        eprintln!("pointer {button:?} pressed={pressed} at {pos:?}, on screen: {}", on_screen(pos));
+                    }
+                    if pressed && !on_screen(pos) {
                         continue;
                     }
                     if pressed {
@@ -448,7 +463,7 @@ impl Session {
                     self.send(ToAgent::MouseButton { button: mouse_button(button), down: pressed });
                 }
                 egui::Event::MouseWheel { unit, delta, .. } => {
-                    if menu_open || !ctx.pointer_hover_pos().is_some_and(|p| area.contains(p)) {
+                    if !ctx.pointer_hover_pos().is_some_and(on_screen) {
                         continue;
                     }
                     let scale = match unit {
@@ -462,7 +477,7 @@ impl Session {
                         let whole = amount.trunc().clamp(i16::MIN as f32, i16::MAX as f32);
                         if whole != 0.0 {
                             *amount -= whole;
-                            let _ = self.shared.tx.send(ToAgent::Wheel { horizontal, delta: whole as i16 });
+                            self.shared.send(ToAgent::Wheel { horizontal, delta: whole as i16 });
                         }
                     }
                 }
@@ -521,12 +536,11 @@ impl eframe::App for Session {
             if hovered && connected {
                 ctx.set_cursor_icon(cursor_icon(cursor));
             }
-            (area, image)
+            (area, ui.layer_id(), image)
         });
-        let (area, image) = panel.inner;
-        if self.focused {
-            self.forward_input(&ctx, area, image);
-        }
+        let (area, layer, image) = panel.inner;
+        // Always called, even unfocused, so it sees the window getting focus back.
+        self.forward_input(&ctx, area, layer, image);
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
