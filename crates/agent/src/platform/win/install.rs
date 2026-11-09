@@ -1,7 +1,7 @@
 //! Installs and removes the agent on this machine.
 
 use crate::config::{self, Store};
-use crate::service::SERVICE_NAME;
+use super::service::SERVICE_NAME;
 use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
 use std::process::Command;

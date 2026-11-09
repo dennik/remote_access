@@ -1,28 +1,20 @@
 //! Remote access agent, installed on each supervised computer.
 //!
-//! `service` runs as a SYSTEM service from boot: it owns the network listener and
-//! logins, and starts a `helper` in the console session for each connection.
-//! The helper does the capture and input injection, which a service in Session 0
-//! cannot do. `console` runs both roles in one process for testing, without
-//! admin rights, but it can't see the lock screen or UAC prompts.
+//! Windows: `service` runs as a SYSTEM service from boot. It owns the network
+//! listener and logins, and starts a `helper` in the console session for each
+//! connection, because a service in Session 0 can't capture or inject input.
+//!
+//! macOS: `run` is started by launchd in the logged-in user's session and does
+//! everything in one process. The login window and lock screen are out of reach.
+//!
+//! `console` runs in the foreground for testing on either platform.
 
-#[cfg(windows)]
 mod capture;
-#[cfg(windows)]
 mod config;
-#[cfg(windows)]
-mod desktop;
-#[cfg(windows)]
 mod diff;
-#[cfg(windows)]
-mod input;
-#[cfg(windows)]
-mod install;
-#[cfg(windows)]
+mod keymap;
+mod platform;
 mod server;
-#[cfg(windows)]
-mod service;
-#[cfg(windows)]
 mod session;
 
 use anyhow::Result;
@@ -37,13 +29,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Install or update the service. Needs an elevated prompt.
+    /// Install or update the agent. Needs an elevated prompt on Windows, or sudo on macOS.
     Install {
         /// The admin key shown in the viewer's dashboard. Repeat to authorize several viewers.
         #[arg(long = "admin-key", required = true)]
         admin_keys: Vec<String>,
     },
-    /// Remove the service, firewall rules, keys and logs. Needs an elevated prompt.
+    /// Remove the agent, firewall rules, keys and logs. Needs an elevated prompt on Windows, or sudo on macOS.
     Uninstall,
     /// Print this machine's name and certificate fingerprint.
     Info,
@@ -62,37 +54,38 @@ enum Command {
         admin_keys: Vec<String>,
     },
     /// Entry point for the Windows service manager.
+    #[cfg(windows)]
     #[command(hide = true)]
     Service,
     /// Started by the service in the console session.
+    #[cfg(windows)]
     #[command(hide = true)]
     Helper {
         #[arg(long)]
         pipe: String,
     },
+    /// Entry point for launchd, in the logged-in user's session.
+    #[cfg(target_os = "macos")]
+    #[command(hide = true)]
+    Run,
 }
 
-#[cfg(windows)]
 fn main() -> Result<()> {
     match Cli::parse().command {
-        Command::Install { admin_keys } => install::install(&admin_keys),
-        Command::Uninstall => install::uninstall(),
-        Command::Info => install::info(),
+        Command::Install { admin_keys } => platform::install::install(&admin_keys),
+        Command::Uninstall => platform::install::uninstall(),
+        Command::Info => platform::install::info(),
         Command::Console { port, bind, data_dir, admin_keys } => {
             let store = config::Store::new(data_dir);
             store.add_authorized_keys(&admin_keys)?;
             println!("fingerprint {}", store.identity()?.fingerprint);
             server::run_console(store, &bind, port)
         }
-        Command::Service => service::run(),
-        Command::Helper { pipe } => service::run_helper(&pipe),
+        #[cfg(windows)]
+        Command::Service => platform::service::run(),
+        #[cfg(windows)]
+        Command::Helper { pipe } => platform::service::run_helper(&pipe),
+        #[cfg(target_os = "macos")]
+        Command::Run => platform::run(),
     }
-}
-
-/// The agent captures and controls a Windows desktop, so it only builds for Windows.
-/// Elsewhere it compiles to a stub, so `cargo build --workspace` still works.
-#[cfg(not(windows))]
-fn main() -> Result<()> {
-    let _ = Cli::parse();
-    anyhow::bail!("rdagent only runs on Windows")
 }

@@ -1,7 +1,7 @@
 //! Network front end: LAN discovery, TLS, viewer login and session dispatch.
 
 use crate::config::{self, Store};
-use crate::{service, session};
+use crate::{platform, session};
 use anyhow::{anyhow, bail, Result};
 use rd_common::proto::{read_msg, write_msg, AuthMsg, DiscoveryReply};
 use rd_common::{auth, tls, DISCOVERY_REQUEST};
@@ -19,20 +19,15 @@ const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Foreground mode: the session runs in this process, in the current user's desktop.
 pub fn run_console(store: Store, bind: &str, port: u16) -> Result<()> {
-    service::set_dpi_aware();
+    platform::set_dpi_aware();
     let runtime = tokio::runtime::Runtime::new()?;
     let addr: SocketAddr = format!("{bind}:{port}").parse()?;
     runtime.block_on(serve(store, addr, None, |stream, _log| async move { session::run(stream).await }))
 }
 
-/// Service mode: each session is relayed to a helper in the console session.
-pub async fn run_service(store: Store) -> Result<()> {
-    let addr: SocketAddr = ([0, 0, 0, 0], rd_common::TCP_PORT).into();
-    let discovery = (rd_common::DISCOVERY_PORT, rd_common::TCP_PORT);
-    serve(store, addr, Some(discovery), |stream, log| service::relay_to_helper(stream, log)).await
-}
-
-async fn serve<F, Fut>(store: Store, addr: SocketAddr, discovery: Option<(u16, u16)>, handler: F) -> Result<()>
+/// Accepts viewers, logs them in, and hands each session to `handler`.
+/// `discovery` is (UDP port, TCP port to advertise).
+pub async fn serve<F, Fut>(store: Store, addr: SocketAddr, discovery: Option<(u16, u16)>, handler: F) -> Result<()>
 where
     F: Fn(TlsStream<TcpStream>, Store) -> Fut + Send + Sync + Clone + 'static,
     Fut: Future<Output = Result<()>> + Send + 'static,

@@ -500,7 +500,20 @@ checksum = "c07782be35f9e1140080c6b96f0d44b739e2278479f64e02fdab4e32dfd8b081"
 dependencies = [
  "bitflags 1.3.2",
  "core-foundation 0.9.4",
- "core-graphics-types",
+ "core-graphics-types 0.1.3",
+ "foreign-types",
+ "libc",
+]
+
+[[package]]
+name = "core-graphics"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "064badf302c3194842cf2c5d61f56cc88e54a759313879cdf03abdd27d0c3b97"
+dependencies = [
+ "bitflags 2.13.2",
+ "core-foundation 0.10.1",
+ "core-graphics-types 0.2.0",
  "foreign-types",
  "libc",
 ]
@@ -513,6 +526,17 @@ checksum = "45390e6114f68f718cc7a830514a96f903cccd70d02a8f6d9f643ac4ba45afaf"
 dependencies = [
  "bitflags 1.3.2",
  "core-foundation 0.9.4",
+ "libc",
+]
+
+[[package]]
+name = "core-graphics-types"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d44a101f213f6c4cdc1853d4b78aef6db6bdfa3468798cc1d9912f4735013eb"
+dependencies = [
+ "bitflags 2.13.2",
+ "core-foundation 0.10.1",
  "libc",
 ]
 
@@ -2277,6 +2301,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "core-foundation 0.10.1",
+ "core-graphics 0.25.0",
  "getrandom 0.3.4",
  "hex",
  "humantime",
@@ -2297,7 +2323,6 @@ name = "rd-common"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "arboard",
  "ed25519-dalek",
  "getrandom 0.3.4",
  "hex",
@@ -3512,7 +3537,7 @@ dependencies = [
  "cfg_aliases",
  "concurrent-queue",
  "core-foundation 0.9.4",
- "core-graphics",
+ "core-graphics 0.23.2",
  "cursor-icon",
  "dpi",
  "js-sys",
