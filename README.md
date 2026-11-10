@@ -55,6 +55,25 @@ Both programs end up in `target\release`, and neither needs anything else instal
 Run `install` again with a new build of `rdagent.exe` to update a computer. Keys and
 identity are kept. To remove everything, run `rdagent.exe uninstall` from an elevated prompt.
 
+### About the admin key
+
+The long number in the install command is the viewer's **public key**. The first time
+`rdviewer` runs, it creates a key pair and keeps the private half to itself (encrypted to
+your Windows account, or in the macOS login keychain). The agent stores only the public
+half and, on every connection, asks the viewer to sign a random challenge with the
+private half. So the number can be shared freely, but only that viewer can log in.
+
+- Each computer (and user account) that runs the viewer has its **own** key. Updating or
+  reinstalling the viewer keeps it, so agents keep working.
+- To let several viewers control a computer, repeat `--admin-key`:
+  ```
+  rdagent.exe install --admin-key <first viewer's key> --admin-key <second viewer's key>
+  ```
+- Running `install` again **adds** keys and keeps the ones already there.
+- The agent makes a key of its own at install, its certificate. Its **fingerprint** is what
+  you confirm in **Trust and add**, so the viewer knows it's talking to the real computer.
+- Run `rdviewer key` to print a viewer's key from the command line.
+
 ## Set up a Mac
 
 On the Mac, with the user who should be visible logged in:
