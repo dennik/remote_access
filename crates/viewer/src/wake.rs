@@ -6,6 +6,28 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr, ToSocketAddrs, UdpSocket};
 
 pub type Mac = [u8; 6];
 
+/// The computer this session window wakes while it can't reach it.
+static TARGET: std::sync::OnceLock<(Mac, Option<Ipv4Addr>)> = std::sync::OnceLock::new();
+
+pub fn set_target(mac: Option<&str>, addr: &str) {
+    if let Some(mac) = mac.and_then(parse_mac) {
+        let _ = TARGET.set((mac, ipv4_of(addr)));
+    }
+}
+
+pub fn has_target() -> bool {
+    TARGET.get().is_some()
+}
+
+/// Called before each connection attempt. A Mac woken by the network may only
+/// stay up for about 45 seconds, so the packet is repeated until a connection
+/// succeeds; the agent then keeps the computer awake.
+pub fn nudge() {
+    if let Some((mac, ip)) = TARGET.get() {
+        let _ = wake(mac, *ip);
+    }
+}
+
 pub fn format_mac(mac: &Mac) -> String {
     mac.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(":")
 }
@@ -112,6 +134,15 @@ mod tests {
         let ip: Ipv4Addr = std::env::var("RD_WAKE_TEST_IP").unwrap().parse().unwrap();
         let mac = lookup(ip).expect("no address found");
         println!("{ip} -> {}", format_mac(&mac));
+    }
+
+    /// RD_WAKE_TEST_MAC=d0:11:e5:77:e0:d4 RD_WAKE_TEST_IP=192.168.1.21 cargo test -p rd-viewer sends_wake -- --ignored
+    #[test]
+    #[ignore]
+    fn sends_wake_from_env() {
+        let mac = parse_mac(&std::env::var("RD_WAKE_TEST_MAC").unwrap()).unwrap();
+        let ip = std::env::var("RD_WAKE_TEST_IP").ok().and_then(|ip| ip.parse().ok());
+        wake(&mac, ip).unwrap();
     }
 
     #[test]

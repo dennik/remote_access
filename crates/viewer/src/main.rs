@@ -39,6 +39,9 @@ enum Command {
         fingerprint: String,
         #[arg(long)]
         name: String,
+        /// Network card address to wake the computer with while it can't be reached.
+        #[arg(long)]
+        mac: Option<String>,
     },
     /// Print this viewer's admin key, for `rdagent install --admin-key`.
     Key,
@@ -86,7 +89,10 @@ fn main() -> Result<()> {
     }
     match cli.command {
         None => dashboard::run(),
-        Some(Command::Session { addr, fingerprint, name }) => session::run(addr, fingerprint, name),
+        Some(Command::Session { addr, fingerprint, name, mac }) => {
+            wake::set_target(mac.as_deref(), &addr);
+            session::run(addr, fingerprint, name)
+        }
         Some(Command::Key) => {
             println!("{}", hex::encode(rd_common::auth::public_key(&store::load_or_create_key()?)));
             Ok(())

@@ -151,9 +151,16 @@ pub fn run(addr: String, fingerprint: String, name: String) -> Result<()> {
 // ------------------------------------------------------------------ network
 
 async fn network_loop(addr: String, fingerprint: String, key: [u8; 32], mut rx: UnboundedReceiver<ToAgent>) {
+    let mut attempt = 0u32;
     loop {
+        // Only after a failure: waking a computer that's already on would just waste a packet.
+        if attempt > 0 {
+            crate::wake::nudge();
+        }
+        attempt += 1;
         let reason = match net::connect(&addr, Some(&fingerprint), &key).await {
             Ok(stream) => {
+                attempt = 0;
                 set_status(true, "");
                 let result = run_connection(stream, &mut rx).await;
                 app().transfers.on_disconnect();
@@ -166,6 +173,10 @@ async fn network_loop(addr: String, fingerprint: String, key: [u8; 32], mut rx: 
             Err(e) if e.is::<FingerprintChanged>() || e.is::<NotAuthorized>() => {
                 set_status(false, &format!("Not connected: {e}"));
                 return;
+            }
+            Err(e) if crate::wake::has_target() => {
+                format!("Can't reach the computer: {e}
+It may be asleep, so a wake signal is sent with each retry.")
             }
             Err(e) => format!("Can't reach the computer: {e}"),
         };

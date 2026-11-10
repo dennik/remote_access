@@ -162,9 +162,12 @@ fn send_wake(host: &Host) -> String {
 }
 
 fn open_session(host: &Host) -> Result<()> {
-    std::process::Command::new(std::env::current_exe()?)
-        .args(["session", "--addr", &host.addr, "--fingerprint", &host.fingerprint, "--name", &host.name])
-        .spawn()?;
+    let mut command = std::process::Command::new(std::env::current_exe()?);
+    command.args(["session", "--addr", &host.addr, "--fingerprint", &host.fingerprint, "--name", &host.name]);
+    if let Some(mac) = &host.mac {
+        command.args(["--mac", mac]);
+    }
+    command.spawn()?;
     Ok(())
 }
 
