@@ -15,6 +15,7 @@ mod session;
 mod session;
 mod store;
 mod transfer;
+mod wake;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};

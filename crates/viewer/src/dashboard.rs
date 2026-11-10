@@ -2,6 +2,7 @@
 
 use crate::net;
 use crate::store::{self, Host};
+use crate::wake;
 use anyhow::{anyhow, Result};
 use eframe::egui;
 use std::collections::HashMap;
@@ -18,6 +19,10 @@ struct Candidate {
 #[derive(Default)]
 struct Shared {
     online: HashMap<String, bool>,
+    /// Network card addresses found by the status checks, by computer address.
+    macs: HashMap<String, String>,
+    /// Addresses whose card address is already saved, so they aren't looked up again.
+    known_macs: Vec<String>,
     watched: Vec<String>,
     found: Vec<Candidate>,
     to_confirm: Option<Candidate>,
@@ -46,6 +51,7 @@ pub fn run() -> Result<()> {
     let hosts = store::load_hosts();
     let shared = Arc::new(Mutex::new(Shared {
         watched: hosts.iter().map(|h| h.addr.clone()).collect(),
+        known_macs: hosts.iter().filter(|h| h.mac.is_some()).map(|h| h.addr.clone()).collect(),
         ..Default::default()
     }));
     start_status_checks(shared.clone());
@@ -79,7 +85,20 @@ fn start_status_checks(shared: Arc<Mutex<Shared>>) {
                 (addr, up)
             })
             .collect();
-        shared.lock().unwrap().online.extend(results);
+        // Online computers are in the local address table now, so learn their card address.
+        let known = shared.lock().unwrap().known_macs.clone();
+        let macs: Vec<_> = results
+            .iter()
+            .filter(|(addr, up)| *up && !known.contains(addr))
+            .filter_map(|(addr, _)| {
+                let mac = wake::lookup(wake::ipv4_of(addr)?)?;
+                Some((addr.clone(), wake::format_mac(&mac)))
+            })
+            .collect();
+        let mut s = shared.lock().unwrap();
+        s.online.extend(results);
+        s.macs.extend(macs);
+        drop(s);
         std::thread::sleep(Duration::from_secs(5));
     });
 }
@@ -131,6 +150,17 @@ fn start_probe(shared: Arc<Mutex<Shared>>, addr: String) {
     });
 }
 
+/// Sends the wake packet. Returns a message to show.
+fn send_wake(host: &Host) -> String {
+    let Some(mac) = host.mac.as_deref().and_then(wake::parse_mac) else {
+        return format!("{} can't be woken yet: it needs to be seen online once first.", host.name);
+    };
+    match wake::wake(&mac, wake::ipv4_of(&host.addr)) {
+        Ok(()) => format!("Sent a wake signal to {}. It can take up to a minute to come online.", host.name),
+        Err(e) => format!("Couldn't send a wake signal to {}: {e}", host.name),
+    }
+}
+
 fn open_session(host: &Host) -> Result<()> {
     std::process::Command::new(std::env::current_exe()?)
         .args(["session", "--addr", &host.addr, "--fingerprint", &host.fingerprint, "--name", &host.name])
@@ -139,8 +169,29 @@ fn open_session(host: &Host) -> Result<()> {
 }
 
 impl Dashboard {
+    /// Saves card addresses the status checks have learned.
+    fn record_macs(&mut self) {
+        let macs = std::mem::take(&mut self.shared.lock().unwrap().macs);
+        let mut changed = false;
+        for (addr, mac) in macs {
+            for host in self.hosts.iter_mut().filter(|h| h.addr == addr) {
+                if host.mac.as_deref() != Some(mac.as_str()) {
+                    host.mac = Some(mac.clone());
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            self.save();
+        }
+    }
+
     fn save(&mut self) {
-        self.shared.lock().unwrap().watched = self.hosts.iter().map(|h| h.addr.clone()).collect();
+        {
+            let mut s = self.shared.lock().unwrap();
+            s.watched = self.hosts.iter().map(|h| h.addr.clone()).collect();
+            s.known_macs = self.hosts.iter().filter(|h| h.mac.is_some()).map(|h| h.addr.clone()).collect();
+        }
         if let Err(e) = store::save_hosts(&self.hosts) {
             self.shared.lock().unwrap().message = format!("Couldn't save the computer list: {e}");
         }
@@ -154,11 +205,13 @@ impl Dashboard {
         let online = self.shared.lock().unwrap().online.clone();
         let mut remove = None;
         let mut failure = None;
+        let mut notice = None;
         let mut rename_done = None::<bool>;
-        egui::Grid::new("computers").striped(true).num_columns(6).spacing([16.0, 8.0]).show(ui, |ui| {
+        egui::Grid::new("computers").striped(true).num_columns(7).spacing([16.0, 8.0]).show(ui, |ui| {
             ui.strong("Computer");
             ui.strong("Address");
             ui.strong("Status");
+            ui.label("");
             ui.label("");
             ui.label("");
             ui.label("");
@@ -185,10 +238,24 @@ impl Dashboard {
                     Some(false) => ui.colored_label(egui::Color32::from_rgb(200, 80, 70), "Offline"),
                     None => ui.label("Checking…"),
                 };
+                let offline = online.get(&host.addr) == Some(&false);
                 if ui.button("Connect").clicked() {
+                    // The session window keeps retrying, so it connects once the computer wakes.
+                    if offline && host.mac.is_some() {
+                        notice = Some(send_wake(host));
+                    }
                     if let Err(e) = open_session(host) {
                         failure = Some(format!("Couldn't open a session window: {e}"));
                     }
+                }
+                let wake_button = egui::Button::new("Wake");
+                let wake_hint = if host.mac.is_some() {
+                    "Wake this computer from sleep over the network (needs a network cable)"
+                } else {
+                    "Available once this computer has been seen online"
+                };
+                if ui.add_enabled(host.mac.is_some(), wake_button).on_hover_text(wake_hint).on_disabled_hover_text(wake_hint).clicked() {
+                    notice = Some(send_wake(host));
                 }
                 let renaming_this = self.renaming.as_ref().is_some_and(|(index, _)| *index == i);
                 if renaming_this {
@@ -214,7 +281,7 @@ impl Dashboard {
                 }
             }
         }
-        if let Some(message) = failure {
+        if let Some(message) = failure.or(notice) {
             self.shared.lock().unwrap().message = message;
         }
         if let Some(i) = remove {
@@ -248,13 +315,14 @@ impl Dashboard {
             let candidate = self.shared.lock().unwrap().to_confirm.take();
             if let (true, Some(c)) = (trust, candidate) {
                 self.hosts.retain(|h| h.addr != c.addr);
-                self.hosts.push(Host { name: c.name, addr: c.addr, fingerprint: c.fingerprint });
+                self.hosts.push(Host { name: c.name, addr: c.addr, fingerprint: c.fingerprint, mac: None });
                 self.save();
             }
         }
     }
 
     fn draw(&mut self, ui: &mut egui::Ui) {
+        self.record_macs();
         ui.heading("Computers");
         ui.add_space(4.0);
         self.computers(ui);

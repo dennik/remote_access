@@ -11,6 +11,9 @@ pub struct Host {
     pub name: String,
     pub addr: String,
     pub fingerprint: String,
+    /// Network card address, learned while the computer is online, for Wake-on-LAN.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mac: Option<String>,
 }
 
 #[cfg(windows)]
