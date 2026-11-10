@@ -63,17 +63,15 @@ pub fn magic_packet(mac: &Mac) -> Vec<u8> {
     packet
 }
 
-/// Broadcasts the wake packet. `ip` is the computer's last address, used for a
-/// broadcast aimed at its own /24 subnet in case this computer has several networks.
+/// Broadcasts the wake packet, and also sends it straight to `ip`, the computer's
+/// last address, which switches often still deliver while it sleeps. Subnet
+/// broadcasts aren't guessed: networks aren't always /24 , because networks aren't always /24.
 pub fn wake(mac: &Mac, ip: Option<Ipv4Addr>) -> std::io::Result<()> {
     let socket = UdpSocket::bind(("0.0.0.0", 0))?;
     socket.set_broadcast(true)?;
     let packet = magic_packet(mac);
     let mut targets = vec![Ipv4Addr::BROADCAST];
-    if let Some(ip) = ip {
-        let [a, b, c, _] = ip.octets();
-        targets.push(Ipv4Addr::new(a, b, c, 255));
-    }
+    targets.extend(ip);
     let mut sent = false;
     let mut last_error = None;
     for target in targets {
