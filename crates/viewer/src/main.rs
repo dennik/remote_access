@@ -14,6 +14,7 @@ mod session;
 #[path = "session_egui.rs"]
 mod session;
 mod store;
+mod transfer;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -52,6 +53,27 @@ enum Command {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// List, send or get files without opening a window. For diagnostics.
+    #[command(hide = true)]
+    Files {
+        #[arg(long)]
+        addr: String,
+        #[arg(long)]
+        fingerprint: Option<String>,
+        /// Folder to list; empty for the starting places.
+        #[arg(long)]
+        list: Option<String>,
+        /// Local files to send into --dir.
+        #[arg(long)]
+        put: Vec<PathBuf>,
+        #[arg(long)]
+        dir: Option<String>,
+        /// Remote file to copy to --to.
+        #[arg(long)]
+        get: Option<String>,
+        #[arg(long)]
+        to: Option<PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -70,6 +92,10 @@ fn main() -> Result<()> {
         }
         Some(Command::Snapshot { addr, fingerprint, seconds, out }) => {
             net::snapshot(&addr, fingerprint.as_deref(), Duration::from_secs(seconds), out.as_deref())
+        }
+        Some(Command::Files { addr, fingerprint, list, put, dir, get, to }) => {
+            let job = net::FileJob { list, put, dir, get, to };
+            net::files(&addr, fingerprint.as_deref(), job)
         }
     }
 }

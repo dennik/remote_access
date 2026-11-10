@@ -190,6 +190,7 @@ where
     };
     write_msg(&mut writer, &ToAgent::SetQuality(quality)).await?;
     write_msg(&mut writer, &ToAgent::SelectMonitor(monitor)).await?;
+    write_msg(&mut writer, &ToAgent::SelectMonitor(rd_common::proto::FEATURE_PROBE)).await?;
 
     let write_side = async {
         while let Some(msg) = rx.recv().await {
@@ -233,6 +234,8 @@ where
                         clipboard::set_text(&text);
                     }
                 }
+                // File transfer: not wired into this window yet.
+                _ => {}
             }
         }
         #[allow(unreachable_code)]

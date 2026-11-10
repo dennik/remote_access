@@ -3,6 +3,7 @@
 //! It needs the Screen Recording and Accessibility permissions.
 
 pub mod capture;
+pub mod files;
 pub mod input;
 pub mod install;
 mod permissions;
@@ -32,7 +33,7 @@ pub fn run() -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     let addr: SocketAddr = ([0, 0, 0, 0], rd_common::TCP_PORT).into();
     let discovery = Some((rd_common::DISCOVERY_PORT, rd_common::TCP_PORT));
-    runtime.block_on(crate::server::serve(store, addr, discovery, |stream, _log| async move {
-        crate::session::run(stream).await
+    runtime.block_on(crate::server::serve(store, addr, discovery, |stream, store| async move {
+        crate::session::run(stream, std::sync::Arc::new(move |line: &str| store.log(line))).await
     }))
 }

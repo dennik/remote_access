@@ -22,7 +22,9 @@ pub fn run_console(store: Store, bind: &str, port: u16) -> Result<()> {
     platform::set_dpi_aware();
     let runtime = tokio::runtime::Runtime::new()?;
     let addr: SocketAddr = format!("{bind}:{port}").parse()?;
-    runtime.block_on(serve(store, addr, None, |stream, _log| async move { session::run(stream).await }))
+    runtime.block_on(serve(store, addr, None, |stream, store| async move {
+        session::run(stream, std::sync::Arc::new(move |line: &str| store.log(line))).await
+    }))
 }
 
 /// Accepts viewers, logs them in, and hands each session to `handler`.

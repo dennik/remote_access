@@ -143,6 +143,8 @@ pub fn snapshot(addr: &str, pin: Option<&str>, duration: Duration, out: Option<&
                 }
                 ToViewer::Cursor(shape) => println!("cursor: {shape:?}"),
                 ToViewer::Clipboard(text) => println!("clipboard: {} chars", text.chars().count()),
+                ToViewer::Features { file_transfer } => println!("file transfer: {file_transfer}"),
+                _ => {}
             }
         }
 
@@ -157,6 +159,128 @@ pub fn snapshot(addr: &str, pin: Option<&str>, duration: Duration, out: Option<&
         if let Some(path) = out {
             std::fs::write(path, bitmap(&fb))?;
             println!("saved {}", path.display());
+        }
+        Ok(())
+    })
+}
+
+pub struct FileJob {
+    pub list: Option<String>,
+    pub put: Vec<std::path::PathBuf>,
+    pub dir: Option<String>,
+    pub get: Option<String>,
+    pub to: Option<std::path::PathBuf>,
+}
+
+/// Runs file operations through the same engine as the session windows.
+pub fn files(addr: &str, pin: Option<&str>, job: FileJob) -> Result<()> {
+    use crate::transfer::Transfers;
+    use std::sync::Arc;
+
+    let key = store::load_or_create_key()?;
+    let addr = with_default_port(addr);
+    tokio::runtime::Runtime::new()?.block_on(async {
+        let stream = connect(&addr, pin, &key).await?;
+        let (mut reader, mut writer) = tokio::io::split(stream);
+        write_msg(&mut writer, &ToAgent::SelectMonitor(rd_common::proto::FEATURE_PROBE)).await?;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<ToAgent>();
+        let changed = Arc::new(tokio::sync::Notify::new());
+        let transfers = {
+            let changed = changed.clone();
+            Arc::new(Transfers::new(tx.clone(), Arc::new(move || changed.notify_one())))
+        };
+        tokio::spawn(async move {
+            while let Some(msg) = rx.recv().await {
+                if write_msg(&mut writer, &msg).await.is_err() {
+                    break;
+                }
+            }
+        });
+        let reading = {
+            let transfers = transfers.clone();
+            tokio::spawn(async move {
+                loop {
+                    let msg = read_msg::<_, ToViewer>(&mut reader).await?;
+                    if transfers.on_message(&msg) {
+                        continue;
+                    }
+                    if let ToViewer::Frame { seq, .. } = msg {
+                        let _ = tx.send(ToAgent::Ack { seq });
+                    }
+                }
+                #[allow(unreachable_code)]
+                Ok::<(), anyhow::Error>(())
+            })
+        };
+
+        let wait = |what: &'static str| {
+            let (changed, reading) = (changed.clone(), &reading);
+            async move {
+                tokio::select! {
+                    _ = changed.notified() => Ok(()),
+                    _ = tokio::time::sleep(Duration::from_secs(30)) => Err(anyhow!("timed out waiting for {what}")),
+                    _ = async { while !reading.is_finished() { tokio::time::sleep(Duration::from_millis(100)).await } } => {
+                        Err(anyhow!("the connection closed"))
+                    }
+                }
+            }
+        };
+
+        while !transfers.snapshot().supported {
+            wait("the feature list").await?;
+        }
+        if let Some(path) = job.list {
+            let request = transfers.list_dir(&path);
+            let listing = loop {
+                if let Some(l) = transfers.take_listings().into_iter().find(|l| l.request == request) {
+                    break l;
+                }
+                wait("the listing").await?;
+            };
+            println!("{} (parent {:?})", if listing.path.is_empty() { "<places>" } else { &listing.path }, listing.parent);
+            if let Some(e) = listing.error {
+                println!("error: {e}");
+            }
+            for e in listing.entries {
+                println!("  {} {}  {}", if e.is_dir { "dir " } else { "file" }, e.size, e.path);
+            }
+        }
+        let mut expected = 0;
+        if !job.put.is_empty() {
+            let dir = job.dir.ok_or_else(|| anyhow!("--put needs --dir"))?;
+            expected += job.put.iter().filter(|p| !p.is_dir()).count();
+            if let Err(e) = transfers.upload(job.put, &dir) {
+                println!("{e}");
+            }
+        }
+        if let Some(remote) = job.get {
+            let to = job.to.ok_or_else(|| anyhow!("--get needs --to"))?;
+            transfers.download(&remote, to);
+            expected += 1;
+        }
+        let start = Instant::now();
+        let mut failed = false;
+        while expected > 0 {
+            for done in transfers.take_finished() {
+                expected -= 1;
+                let verb = if done.upload { "sent" } else { "got" };
+                match done.result {
+                    Ok(path) => println!("{verb} {} -> {path}", done.name),
+                    Err(e) => {
+                        failed = true;
+                        println!("FAILED {}: {e}", done.name);
+                    }
+                }
+            }
+            if expected > 0 {
+                wait("a transfer").await?;
+            }
+        }
+        if start.elapsed() > Duration::from_millis(1) {
+            println!("transfers took {:.2}s", start.elapsed().as_secs_f64());
+        }
+        if failed {
+            bail!("some transfers failed");
         }
         Ok(())
     })

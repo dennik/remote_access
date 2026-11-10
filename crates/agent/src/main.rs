@@ -12,6 +12,7 @@
 mod capture;
 mod config;
 mod diff;
+mod files;
 mod keymap;
 mod platform;
 mod server;

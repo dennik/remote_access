@@ -104,7 +104,9 @@ pub fn run_helper(pipe: &str) -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     let result = runtime.block_on(async {
         let client = ClientOptions::new().open(pipe)?;
-        session::run(client).await
+        // The helper runs as SYSTEM, so it can write the service's own log.
+        let store = Store::system();
+        session::run(client, std::sync::Arc::new(move |line: &str| store.log(line))).await
     });
     // Capture threads may be blocked in driver calls; don't wait for them.
     runtime.shutdown_timeout(Duration::from_millis(100));
