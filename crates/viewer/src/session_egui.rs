@@ -195,6 +195,11 @@ async fn network_loop(
                 set_status(&shared, false, &format!("Not connected: {e}"));
                 return;
             }
+            Err(e) if crate::wake::has_target() => {
+                // One magic packet only buys a short dark wake, so keep sending until it's up.
+                crate::wake::nudge();
+                format!("Can't reach the computer: {e}\nIt may be asleep, so a wake signal is sent with each retry.")
+            }
             Err(e) => format!("Can't reach the computer: {e}"),
         };
         shared.transfers.on_disconnect();
