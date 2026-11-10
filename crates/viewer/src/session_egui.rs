@@ -9,13 +9,16 @@ use crate::geometry::{fit_rect, to_remote};
 use crate::keymap;
 use crate::net::{self, FingerprintChanged, NotAuthorized};
 use crate::store;
+use crate::transfer::{self, Listing, Transfers};
 use anyhow::{anyhow, Result};
 use eframe::egui;
 use rd_common::clipboard;
 use rd_common::proto::{read_msg, write_msg, CursorShape, MonitorInfo, MouseButton, ToAgent, ToViewer};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 use std::time::Duration;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
@@ -44,7 +47,8 @@ struct Shared {
     ui: Mutex<UiState>,
     tx: UnboundedSender<ToAgent>,
     clipboard_enabled: AtomicBool,
-    ctx: OnceLock<egui::Context>,
+    ctx: Arc<OnceLock<egui::Context>>,
+    transfers: Transfers,
 }
 
 impl Shared {
@@ -78,11 +82,40 @@ struct Session {
     wheel: egui::Vec2,
     fullscreen: bool,
     focused: bool,
+    /// The remote file browser, while open.
+    picker: Option<Picker>,
+    /// The last transfer result, shown until dismissed or replaced.
+    notice: Option<(String, bool, Instant)>,
+}
+
+/// What the remote browser is choosing.
+enum PickerMode {
+    /// A folder to put these local files in.
+    Upload(Vec<PathBuf>),
+    /// A file to bring back.
+    Download,
+}
+
+struct Picker {
+    mode: PickerMode,
+    /// The listing being waited for. Older replies are ignored.
+    request: u32,
+    listing: Option<Listing>,
 }
 
 pub fn run(addr: String, fingerprint: String, name: String) -> Result<()> {
     let key = store::load_or_create_key()?;
     let (tx, rx) = unbounded_channel();
+    let ctx: Arc<OnceLock<egui::Context>> = Arc::new(OnceLock::new());
+    let repaint_ctx = ctx.clone();
+    let transfers = Transfers::new(
+        tx.clone(),
+        Arc::new(move || {
+            if let Some(ctx) = repaint_ctx.get() {
+                ctx.request_repaint();
+            }
+        }),
+    );
     let shared = Arc::new(Shared {
         framebuffer: Mutex::new(Framebuffer::default()),
         dirty: AtomicBool::new(false),
@@ -97,7 +130,8 @@ pub fn run(addr: String, fingerprint: String, name: String) -> Result<()> {
         }),
         tx,
         clipboard_enabled: AtomicBool::new(true),
-        ctx: OnceLock::new(),
+        ctx,
+        transfers,
     });
 
     let net_shared = shared.clone();
@@ -130,6 +164,8 @@ pub fn run(addr: String, fingerprint: String, name: String) -> Result<()> {
                 wheel: egui::Vec2::ZERO,
                 fullscreen: false,
                 focused: true,
+                picker: None,
+                notice: None,
             }))
         }),
     )
@@ -161,6 +197,7 @@ async fn network_loop(
             }
             Err(e) => format!("Can't reach the computer: {e}"),
         };
+        shared.transfers.on_disconnect();
         set_status(&shared, false, &format!("{reason}\nReconnecting…"));
         tokio::time::sleep(Duration::from_secs(2)).await;
         // Input typed while disconnected must not run on the machine once it's back.
@@ -200,7 +237,11 @@ where
     };
     let read_side = async {
         loop {
-            match read_msg::<_, ToViewer>(&mut reader).await? {
+            let msg = read_msg::<_, ToViewer>(&mut reader).await?;
+            if shared.transfers.on_message(&msg) {
+                continue;
+            }
+            match msg {
                 ToViewer::Frame { seq, width, height, tiles } => {
                     // Off the async threads: a whole 4K frame takes a noticeable time to decode.
                     let (decoded, tiles) = tokio::task::spawn_blocking(move || {
@@ -234,7 +275,7 @@ where
                         clipboard::set_text(&text);
                     }
                 }
-                // File transfer: not wired into this window yet.
+                // File messages were handled by `transfers` above.
                 _ => {}
             }
         }
@@ -361,6 +402,15 @@ impl Session {
                 if ui.button("Send Windows key").clicked() {
                     self.tap(keymap::WIN);
                 }
+                let files_ok = self.shared.transfers.snapshot().supported;
+                if ui.add_enabled(files_ok, egui::Button::new("Send files…")).clicked() {
+                    if let Some(paths) = rfd::FileDialog::new().set_title("Send files").pick_files() {
+                        self.open_upload(paths);
+                    }
+                }
+                if ui.add_enabled(files_ok, egui::Button::new("Get a file…")).clicked() {
+                    self.open_picker(PickerMode::Download);
+                }
                 if ui.button("Refresh screen").clicked() {
                     self.send(ToAgent::RequestFullFrame);
                 }
@@ -400,6 +450,215 @@ impl Session {
         });
     }
 
+    fn open_picker(&mut self, mode: PickerMode) {
+        // Keys and buttons held now would stay down on the remote computer.
+        self.release_all();
+        let request = self.shared.transfers.list_dir("");
+        self.picker = Some(Picker { mode, request, listing: None });
+    }
+
+    fn open_upload(&mut self, paths: Vec<PathBuf>) {
+        if paths.is_empty() {
+            return;
+        }
+        self.open_picker(PickerMode::Upload(paths));
+    }
+
+    fn notify(&mut self, text: String, ok: bool) {
+        self.notice = Some((text, ok, Instant::now()));
+    }
+
+    /// Dropped files, results, the progress bar and the remote browser.
+    fn file_transfer_ui(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let state = self.shared.transfers.snapshot();
+
+        let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| !p.as_os_str().is_empty()).collect());
+        if !dropped.is_empty() {
+            if !state.supported {
+                self.notify(
+                    "This computer's agent can't receive files. Update the agent to the latest version.".to_string(),
+                    false,
+                );
+            } else if self.picker.is_none() {
+                self.open_upload(dropped);
+            }
+        }
+
+        for finished in self.shared.transfers.take_finished() {
+            let verb = if finished.upload { "Sent" } else { "Saved" };
+            match finished.result {
+                Ok(path) => self.notify(format!("{verb} {} to {path}", finished.name), true),
+                Err(e) => self.notify(format!("{} failed: {e}", finished.name), false),
+            }
+        }
+        for listing in self.shared.transfers.take_listings() {
+            if let Some(picker) = &mut self.picker {
+                if picker.request == listing.request {
+                    picker.listing = Some(listing);
+                }
+            }
+        }
+        if !state.supported && self.picker.is_some() {
+            self.picker = None;
+            self.notify("The connection dropped, so the file browser closed.".to_string(), false);
+        }
+
+        let hovering = ctx.input(|i| !i.raw.hovered_files.is_empty());
+        if hovering && state.supported {
+            egui::Area::new(egui::Id::unique("drop hint")).anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0)).show(&ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.heading(format!("Drop to send to {}", self.name));
+                });
+            });
+        }
+
+        if state.current.is_some() || self.notice.is_some() {
+            egui::Panel::bottom("transfers").show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    if let Some(current) = &state.current {
+                        let verb = if current.upload { "Sending" } else { "Getting" };
+                        let fraction = current.total.filter(|t| *t > 0).map(|t| current.done as f32 / t as f32);
+                        ui.label(format!("{verb} {}", current.name));
+                        let bar = egui::ProgressBar::new(fraction.unwrap_or(0.0)).desired_width(220.0);
+                        ui.add(if fraction.is_some() { bar.show_percentage() } else { bar.animate(true) });
+                        if state.queued > 0 {
+                            ui.weak(format!("{} more waiting", state.queued));
+                        }
+                        if ui.button("Cancel").clicked() {
+                            self.shared.transfers.cancel(current.id);
+                        }
+                        ui.separator();
+                    }
+                    let mut dismiss = false;
+                    if let Some((text, ok, at)) = &self.notice {
+                        let colour = if *ok { egui::Color32::from_rgb(60, 170, 90) } else { egui::Color32::from_rgb(220, 90, 80) };
+                        ui.colored_label(colour, text);
+                        // Successes fade after a while; failures stay until dismissed.
+                        dismiss = ui.small_button("✕").clicked() || (*ok && at.elapsed() > Duration::from_secs(8));
+                    }
+                    if dismiss {
+                        self.notice = None;
+                    }
+                });
+            });
+            ctx.request_repaint_after(Duration::from_millis(500));
+        }
+
+        self.picker_window(&ctx);
+    }
+
+    fn picker_window(&mut self, ctx: &egui::Context) {
+        let Some(picker) = &self.picker else { return };
+        let title = match &picker.mode {
+            PickerMode::Upload(files) if files.len() == 1 => {
+                format!("Where on {} should {} go?", self.name, transfer::display_name(&files[0].to_string_lossy()))
+            }
+            PickerMode::Upload(files) => format!("Where on {} should these {} files go?", self.name, files.len()),
+            PickerMode::Download => format!("Choose a file on {}", self.name),
+        };
+        let upload = matches!(picker.mode, PickerMode::Upload(_));
+        let listing = picker.listing.clone();
+
+        let mut navigate = None::<String>;
+        let mut choose_file = None::<(String, String)>;
+        let mut put_here = false;
+        let mut close = false;
+        egui::Window::new(title)
+            .collapsible(false)
+            .resizable(true)
+            .default_size([520.0, 420.0])
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                let Some(listing) = &listing else {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("Loading…");
+                    });
+                    if ui.button("Cancel").clicked() {
+                        close = true;
+                    }
+                    return;
+                };
+                ui.horizontal(|ui| {
+                    if let Some(parent) = &listing.parent {
+                        if ui.button("⬆ Up").clicked() {
+                            navigate = Some(parent.clone());
+                        }
+                    }
+                    let here = if listing.path.is_empty() { "Places".to_string() } else { listing.path.clone() };
+                    ui.monospace(here);
+                });
+                if let Some(error) = &listing.error {
+                    ui.colored_label(egui::Color32::from_rgb(220, 90, 80), error);
+                }
+                ui.separator();
+                egui::ScrollArea::vertical().max_height(300.0).auto_shrink([false, false]).show(ui, |ui| {
+                    for entry in &listing.entries {
+                        if entry.is_dir {
+                            if ui.selectable_label(false, format!("📁 {}", entry.name)).clicked() {
+                                navigate = Some(entry.path.clone());
+                            }
+                        } else if upload {
+                            ui.add_enabled(false, egui::Button::selectable(false, format!("    {}", entry.name)));
+                        } else if ui
+                            .selectable_label(false, format!("    {}   ({})", entry.name, human_size(entry.size)))
+                            .clicked()
+                        {
+                            choose_file = Some((entry.path.clone(), entry.name.clone()));
+                        }
+                    }
+                    if listing.entries.is_empty() && listing.error.is_none() {
+                        ui.weak("This folder is empty.");
+                    }
+                });
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if upload {
+                        // The starting places are a list, not a folder.
+                        let in_folder = !listing.path.is_empty() && listing.error.is_none();
+                        if ui.add_enabled(in_folder, egui::Button::new("Put files here")).clicked() {
+                            put_here = true;
+                        }
+                    } else {
+                        ui.weak("Click a file to save it on this Mac.");
+                    }
+                    if ui.button("Cancel").clicked() {
+                        close = true;
+                    }
+                });
+            });
+
+        if let Some(path) = navigate {
+            let request = self.shared.transfers.list_dir(&path);
+            if let Some(picker) = &mut self.picker {
+                picker.request = request;
+                picker.listing = None;
+            }
+        }
+        if put_here {
+            if let Some(Picker { mode: PickerMode::Upload(files), listing: Some(listing), .. }) = self.picker.take() {
+                if let Err(e) = self.shared.transfers.upload(files, &listing.path) {
+                    self.notify(e, false);
+                }
+            }
+        }
+        if let Some((remote, name)) = choose_file {
+            let downloads = std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Downloads"));
+            let mut dialog = rfd::FileDialog::new().set_title("Save file").set_file_name(&name);
+            if let Some(dir) = downloads {
+                dialog = dialog.set_directory(dir);
+            }
+            if let Some(local) = dialog.save_file() {
+                self.shared.transfers.download(&remote, local);
+                self.picker = None;
+            }
+        }
+        if close {
+            self.picker = None;
+        }
+    }
+
     /// Forwards this frame's keyboard and mouse input to the remote computer.
     fn forward_input(&mut self, ctx: &egui::Context, area: egui::Rect, layer: egui::LayerId, image: (i32, i32, i32, i32)) {
         let events = ctx.input(|i| i.events.clone());
@@ -419,7 +678,8 @@ impl Session {
                     }
                 }
                 // Nothing else is forwarded while another window has focus.
-                _ if !self.focused => {}
+                // Nothing else is forwarded while the file browser is open either.
+                _ if !self.focused || self.picker.is_some() => {}
                 egui::Event::Key { key, physical_key, pressed, repeat, .. } => {
                     let key = physical_key.unwrap_or(key);
                     let Some(code) = keymap::scan_code(key) else { continue };
@@ -511,6 +771,7 @@ impl eframe::App for Session {
         if !self.fullscreen {
             egui::Panel::top("menu").show(ui, |ui| self.menu_bar(ui));
         }
+        self.file_transfer_ui(ui);
         let panel = egui::CentralPanel::default().frame(egui::Frame::new().fill(egui::Color32::BLACK)).show(ui, |ui| {
             let area = ui.max_rect();
             let image = match &self.texture {
@@ -549,4 +810,15 @@ impl eframe::App for Session {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.release_all();
     }
+}
+
+fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["bytes", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1000.0 && unit < UNITS.len() - 1 {
+        value /= 1000.0;
+        unit += 1;
+    }
+    if unit == 0 { format!("{bytes} bytes") } else { format!("{value:.1} {}", UNITS[unit]) }
 }
