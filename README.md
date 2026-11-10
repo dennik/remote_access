@@ -20,7 +20,8 @@ Remote desktop for computers on a local network, such as unattended work PCs.
   sending wake signals until it answers.
 - **Stays reachable.** Windows agents run as a service from boot. Mac agents keep the
   Mac from sleeping while idle and turn its display on when you connect.
-- **Unattended.** Nothing appears on the remote screen, so the computer's own work isn't interrupted.
+- **Unattended.** Nothing appears on the remote screen, so the computer's
+  own work isn't interrupted.
 - **Dashboard** with online status, network scan, renaming, and one-click install
   commands.
 - **Secure by default:** TLS 1.3, pinned certificates, and per-viewer Ed25519 keys.

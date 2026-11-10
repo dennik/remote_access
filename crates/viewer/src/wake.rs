@@ -87,7 +87,7 @@ pub fn magic_packet(mac: &Mac) -> Vec<u8> {
 
 /// Broadcasts the wake packet, and also sends it straight to `ip`, the computer's
 /// last address, which switches often still deliver while it sleeps. Subnet
-/// broadcasts aren't guessed: networks aren't always /24 , because networks aren't always /24.
+/// broadcasts aren't guessed, because networks aren't always /24.
 pub fn wake(mac: &Mac, ip: Option<Ipv4Addr>) -> std::io::Result<()> {
     let socket = UdpSocket::bind(("0.0.0.0", 0))?;
     socket.set_broadcast(true)?;
@@ -136,7 +136,7 @@ mod tests {
         println!("{ip} -> {}", format_mac(&mac));
     }
 
-    /// RD_WAKE_TEST_MAC=d0:11:e5:77:e0:d4 RD_WAKE_TEST_IP=192.168.1.21 cargo test -p rd-viewer sends_wake -- --ignored
+    /// RD_WAKE_TEST_MAC=a4:83:e7:01:02:03 RD_WAKE_TEST_IP=192.168.1.20 cargo test -p rd-viewer sends_wake -- --ignored
     #[test]
     #[ignore]
     fn sends_wake_from_env() {
