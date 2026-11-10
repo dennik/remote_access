@@ -25,4 +25,5 @@ tokio-rustls.workspace = true
 windows.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
+rfd = { version = "0.15", default-features = false }
 security-framework.workspace = true

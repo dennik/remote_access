@@ -3,9 +3,11 @@
 //! It needs the Screen Recording and Accessibility permissions.
 
 pub mod capture;
+pub mod files;
 pub mod input;
 pub mod install;
 mod permissions;
+mod power;
 
 use crate::config::Store;
 use anyhow::Result;
@@ -29,10 +31,17 @@ pub fn run() -> Result<()> {
     let store = Store::mac_user()?;
     // Puts the agent in both permission lists, and prompts the first time.
     permissions::request(&store);
+    let awake = power::Assertion::keep_awake();
+    if awake.is_none() {
+        store.log("couldn't stop the Mac sleeping when idle, so it may stop answering viewers");
+    }
     let runtime = tokio::runtime::Runtime::new()?;
     let addr: SocketAddr = ([0, 0, 0, 0], rd_common::TCP_PORT).into();
     let discovery = Some((rd_common::DISCOVERY_PORT, rd_common::TCP_PORT));
-    runtime.block_on(crate::server::serve(store, addr, discovery, |stream, _log| async move {
-        crate::session::run(stream).await
-    }))
+    let result = runtime.block_on(crate::server::serve(store, addr, discovery, |stream, store| async move {
+        let _display_on = power::Assertion::viewer_connected();
+        crate::session::run(stream, std::sync::Arc::new(move |line: &str| store.log(line))).await
+    }));
+    drop(awake);
+    result
 }

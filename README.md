@@ -2,6 +2,30 @@
 
 Remote desktop for computers on a local network, such as unattended work PCs.
 
+## What it can do
+
+- **Full remote control** of Windows PCs and Macs: live screen, mouse and keyboard,
+  every display, and a shared text clipboard. Works from a Windows PC or a Mac, in any
+  direction.
+- **No Windows Remote Desktop needed.** The agent doesn't use RDP, so it works on
+  Windows Home editions, which can't be controlled with Remote Desktop, and on any PC
+  where remote access was never set up. Install one program and that's it.
+- **Login screen, lock screen and UAC prompts** on Windows, including Ctrl+Alt+Del, so
+  you can sign in after a restart.
+- **File transfer both ways.** Drop files on a session window and choose a folder on
+  the remote computer, or browse the remote computer and copy a file back. Existing
+  files are never overwritten.
+- **Wake-on-LAN.** The dashboard learns each computer's network card address and can
+  wake it from sleep over a wired connection. Connecting to a sleeping computer keeps
+  sending wake signals until it answers.
+- **Stays reachable.** Windows agents run as a service from boot. Mac agents keep the
+  Mac from sleeping while idle and turn its display on when you connect.
+- **Unattended.** Nothing appears on the remote screen, so the computer's
+  own work isn't interrupted.
+- **Dashboard** with online status, network scan, renaming, and one-click install
+  commands.
+- **Secure by default:** TLS 1.3, pinned certificates, and per-viewer Ed25519 keys.
+
 - `rdagent` runs on each supervised computer. On Windows it's a service that starts at
   boot. On macOS it starts when the user logs in. See [MACOS.md](MACOS.md) for the macOS agent.
 - `rdviewer` runs on your Windows PC or Mac: a dashboard, with each remote desktop in its own window.
@@ -31,6 +55,25 @@ Both programs end up in `target\release`, and neither needs anything else instal
 Run `install` again with a new build of `rdagent.exe` to update a computer. Keys and
 identity are kept. To remove everything, run `rdagent.exe uninstall` from an elevated prompt.
 
+### About the admin key
+
+The long number in the install command is the viewer's **public key**. The first time
+`rdviewer` runs, it creates a key pair and keeps the private half to itself (encrypted to
+your Windows account, or in the macOS login keychain). The agent stores only the public
+half and, on every connection, asks the viewer to sign a random challenge with the
+private half. So the number can be shared freely, but only that viewer can log in.
+
+- Each computer (and user account) that runs the viewer has its **own** key. Updating or
+  reinstalling the viewer keeps it, so agents keep working.
+- To let several viewers control a computer, repeat `--admin-key`:
+  ```
+  rdagent.exe install --admin-key <first viewer's key> --admin-key <second viewer's key>
+  ```
+- Running `install` again **adds** keys and keeps the ones already there.
+- The agent makes a key of its own at install, its certificate. Its **fingerprint** is what
+  you confirm in **Trust and add**, so the viewer knows it's talking to the real computer.
+- Run `rdviewer key` to print a viewer's key from the command line.
+
 ## Set up a Mac
 
 On the Mac, with the user who should be visible logged in:
@@ -53,10 +96,22 @@ Mac, the Windows key acts as Command. Details and limits are in [MACOS.md](MACOS
 | Switch display | Monitor menu |
 | Trade sharpness for speed | Quality menu |
 | Turn clipboard sharing off | Session menu |
+| Send files | Drop them on the window, or Session menu → Send files… |
+| Copy a file from the computer | Session menu → Get a file… |
+| Wake a sleeping computer | **Wake** in the dashboard, or just **Connect** |
 
 While the window has focus, all other keys go to the remote computer, including Win,
 Alt+Tab and Alt+F4. Sessions reconnect by themselves after a reboot or network drop. A
 new connection to a computer replaces the previous one.
+
+Sent files go into the folder you pick. A file with the same name is saved as
+`name (2).ext` instead of replacing it, and an interrupted transfer leaves nothing
+behind. Folders can't be sent yet, only files. Transfers need the agent and viewer from
+the same release or later; older agents simply don't offer it.
+
+Wake-on-LAN needs a network cable and wake-on-network turned on (on a Mac, "Wake for
+network access"; on Windows, the network adapter's power settings and often the BIOS).
+The dashboard learns a computer's address the first time it sees it online.
 
 ## What gets installed
 
@@ -116,7 +171,7 @@ Console mode can't see the lock screen or UAC prompts, or send Ctrl+Alt+Del.
   whatever the computer is showing.
 - Windows agents serve only the physical console session, not
   RDP sessions. Mac agents serve only a logged-in user, not the login window.
-- Text clipboard only.
+- Text clipboard only. Files go through file transfer.
 - The remote pointer isn't drawn. The viewer shows its own cursor, in the remote cursor's
   shape, so you won't see someone moving the mouse at the computer itself.
 - Scaling is fit-to-window only.
@@ -124,8 +179,9 @@ Console mode can't see the lock screen or UAC prompts, or send Ctrl+Alt+Del.
 
 ## macOS viewer
 
-The viewer also runs on macOS (Apple Silicon and Intel, macOS 11 or later). The agent
-stays Windows-only.
+The viewer also runs on macOS (Apple Silicon and Intel, macOS 11 or later), with the
+same dashboard, file transfer and Wake button. Macs can also run the agent; see
+[Set up a Mac](#set-up-a-mac).
 
 Install or update it with:
 

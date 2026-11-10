@@ -14,6 +14,8 @@ mod session;
 #[path = "session_egui.rs"]
 mod session;
 mod store;
+mod transfer;
+mod wake;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -37,6 +39,9 @@ enum Command {
         fingerprint: String,
         #[arg(long)]
         name: String,
+        /// Network card address to wake the computer with while it can't be reached.
+        #[arg(long)]
+        mac: Option<String>,
     },
     /// Print this viewer's admin key, for `rdagent install --admin-key`.
     Key,
@@ -52,6 +57,27 @@ enum Command {
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// List, send or get files without opening a window. For diagnostics.
+    #[command(hide = true)]
+    Files {
+        #[arg(long)]
+        addr: String,
+        #[arg(long)]
+        fingerprint: Option<String>,
+        /// Folder to list; empty for the starting places.
+        #[arg(long)]
+        list: Option<String>,
+        /// Local files to send into --dir.
+        #[arg(long)]
+        put: Vec<PathBuf>,
+        #[arg(long)]
+        dir: Option<String>,
+        /// Remote file to copy to --to.
+        #[arg(long)]
+        get: Option<String>,
+        #[arg(long)]
+        to: Option<PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -63,13 +89,20 @@ fn main() -> Result<()> {
     }
     match cli.command {
         None => dashboard::run(),
-        Some(Command::Session { addr, fingerprint, name }) => session::run(addr, fingerprint, name),
+        Some(Command::Session { addr, fingerprint, name, mac }) => {
+            wake::set_target(mac.as_deref(), &addr);
+            session::run(addr, fingerprint, name)
+        }
         Some(Command::Key) => {
             println!("{}", hex::encode(rd_common::auth::public_key(&store::load_or_create_key()?)));
             Ok(())
         }
         Some(Command::Snapshot { addr, fingerprint, seconds, out }) => {
             net::snapshot(&addr, fingerprint.as_deref(), Duration::from_secs(seconds), out.as_deref())
+        }
+        Some(Command::Files { addr, fingerprint, list, put, dir, get, to }) => {
+            let job = net::FileJob { list, put, dir, get, to };
+            net::files(&addr, fingerprint.as_deref(), job)
         }
     }
 }

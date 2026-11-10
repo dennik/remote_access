@@ -1,5 +1,6 @@
 pub mod capture;
 mod desktop;
+pub mod files;
 pub mod input;
 pub mod install;
 pub mod service;

@@ -4,12 +4,13 @@
 
 use crate::capture::{Capturer, Grab};
 use crate::diff::{self, Rect};
+use crate::files;
 use crate::platform::{capture, input, DesktopTracker};
 use anyhow::Result;
 use jpeg_encoder::{ColorType, Encoder, SamplingFactor};
 use rayon::prelude::*;
 use rd_common::clipboard;
-use rd_common::proto::{read_msg, write_msg, CursorShape, MonitorInfo, MouseButton, Tile, ToAgent, ToViewer};
+use rd_common::proto::{read_msg, write_msg, CursorShape, MonitorInfo, MouseButton, Tile, ToAgent, ToViewer, FEATURE_PROBE};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU8, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -43,7 +44,8 @@ enum InputEvent {
     Key(u16, bool, bool),
 }
 
-pub async fn run<S>(stream: S) -> Result<()>
+/// `log` records file transfers in the connection log.
+pub async fn run<S>(stream: S, log: files::Log) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -88,6 +90,11 @@ where
         let (shared, tx) = (shared.clone(), out_tx.clone());
         std::thread::spawn(move || clipboard_loop(shared, tx, clip_rx))
     };
+    let (files_tx, files_rx) = mpsc::channel::<files::Command>();
+    let files_thread = {
+        let tx = out_tx.clone();
+        std::thread::spawn(move || files::worker(files_rx, tx, log))
+    };
     drop(out_tx);
 
     // Runs until the viewer disconnects, or the writer fails because it has.
@@ -100,6 +107,7 @@ where
             ToAgent::Ack { .. } => {
                 shared.in_flight.fetch_sub(1, Ordering::SeqCst);
             }
+            ToAgent::SelectMonitor(FEATURE_PROBE) => drop(files_tx.send(files::Command::Features)),
             ToAgent::SelectMonitor(i) => {
                 if (i as usize) < shared.monitors.lock().unwrap().len() {
                     shared.monitor.store(i, Ordering::SeqCst);
@@ -118,6 +126,15 @@ where
             ToAgent::Clipboard(text) => drop(clip_tx.send(text)),
             // Sending the secure attention sequence needs the service. Ignored in console mode.
             ToAgent::CtrlAltDel => {}
+            ToAgent::ListDir { request, path } => drop(files_tx.send(files::Command::List { request, path })),
+            ToAgent::UploadBegin { id, dir, name, size } => {
+                drop(files_tx.send(files::Command::UploadBegin { id, dir, name, size }))
+            }
+            ToAgent::UploadData { id, data } => drop(files_tx.send(files::Command::UploadData { id, data })),
+            ToAgent::UploadEnd { id } => drop(files_tx.send(files::Command::UploadEnd { id })),
+            ToAgent::DownloadBegin { id, path } => drop(files_tx.send(files::Command::DownloadBegin { id, path })),
+            ToAgent::TransferAck { id, received } => drop(files_tx.send(files::Command::DownloadAck { id, received })),
+            ToAgent::TransferCancel { id } => drop(files_tx.send(files::Command::Cancel { id })),
         }
     };
 
@@ -126,7 +143,10 @@ where
     writer_task.abort();
     drop(input_tx);
     drop(clip_tx);
+    // Closing this makes the worker delete unfinished uploads and exit.
+    drop(files_tx);
     let _ = tokio::task::spawn_blocking(move || {
+        let _ = files_thread.join();
         let _ = capture_thread.join();
         let _ = input_thread.join();
         let _ = clipboard_thread.join();
